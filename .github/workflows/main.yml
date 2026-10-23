@@ -1,0 +1,48 @@
+name: Build APK
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find the game project
+        run: |
+          echo "--- files in the repository ---"; find . -path ./.git -prune -o -type f -print | head -50
+          best=""; bestv=0
+          check() { f=$(find "$1" -name settings.gradle.kts -not -path '*/.git/*' | head -1); [ -n "$f" ] || return 0
+            p=$(dirname "$f"); v=$(grep -o 'versionCode = [0-9]*' "$p/app/build.gradle.kts" 2>/dev/null | grep -o '[0-9]*' || echo 0); v=${v:-0}
+            echo "found project in $p (version $v)"; if [ "$v" -gt "$bestv" ]; then bestv=$v; best="$p"; fi; }
+          check .
+          while IFS= read -r z; do d="unz_$RANDOM"; mkdir "$d"; unzip -q "$z" -d "$d" || { echo "could not unzip $z"; continue; }; check "$d"; done < <(find . -name '*.zip' -not -path './unz_*')
+          if [ -z "$best" ]; then echo "NO GAME PROJECT FOUND. Upload emberwake-android.zip to the repository (Add file > Upload files)."; exit 1; fi
+          echo "Using $best (version $bestv)"; echo "PROJECT_DIR=$best" >> $GITHUB_ENV
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android 16 SDK
+        continue-on-error: true
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Build release APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Rename
+        run: cp "$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk" Emberwake.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Emberwake-apk
+          path: Emberwake.apk
